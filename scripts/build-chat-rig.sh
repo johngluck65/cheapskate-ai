@@ -1,286 +1,130 @@
 #!/usr/bin/env bash
-#
-# build-chat-rig.sh
-#
-# Conservative preflight check for:
-#   macOS
-#   OrbStack or Docker
-#   Ollama
-#   Open WebUI
-#   OpenRouter
-#
-# This script does not:
-#   - Install software
-#   - Pull models
-#   - Restart containers
-#   - Delete anything
-#   - Modify Docker volumes
-#   - Store an API key
-#
+set -euo pipefail
 
-set -uo pipefail
+# Minimal setup/start script for an existing LibreChat checkout on macOS.
+# It backs up config files before editing them and never overwrites an existing API key.
 
-MODE="check"
-OPENROUTER_KEY="${OPENROUTER_API_KEY:-}"
+REPO="$HOME/repos/LibreChat"
 
-usage() {
-  cat <<'EOF'
-Usage:
-  build-chat-rig.sh --check-only
-  build-chat-rig.sh --help
+say() { printf '\n==> %s\n' "$*"; }
+die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
-This script only checks the local chat rig. It does not install software,
-pull models, modify Docker volumes, restart containers, or store an API key.
-EOF
-}
+[[ "$(uname -s)" == "Darwin" ]] || die "This script is for macOS."
+[[ -d "$REPO/.git" ]] || die "I can't find a LibreChat git checkout at $REPO. Edit REPO near the top of this script if needed."
 
-while (($#)); do
-  case "$1" in
-    --check-only)
-      MODE="check"
-      shift
-      ;;
-    --help|-h)
-      usage
-      exit 0
-      ;;
-    *)
-      printf 'Unknown option: %s\n' "$1" >&2
-      usage >&2
-      exit 2
-      ;;
-  esac
-done
-
-pass() {
-  printf 'PASS: %s\n' "$*"
-}
-
-warn() {
-  printf 'WARN: %s\n' "$*"
-}
-
-fail() {
-  printf 'FAIL: %s\n' "$*"
-}
-
-DOCKER_CMD=""
-ORB_CMD=""
-
-DOCKER_OK=0
-ORB_OK=0
-
-DOCKER_INFO=""
-ORB_STATUS=""
-CONTEXT=""
-CONTEXT_INFO=""
-
-RUNTIME="none"
-
-OLLAMA_OK=0
-MODEL_OK=0
-WEBUI_OK=0
-OR_AUTH_OK=0
-
-FATAL=0
-
-# -----------------------------------------------------------------------------
-# 1. Detect the Docker-compatible runtime first.
-# -----------------------------------------------------------------------------
-
-if command -v docker >/dev/null 2>&1; then
-  DOCKER_CMD="$(command -v docker)"
-
-  if DOCKER_INFO="$(docker info 2>&1)"; then
-    DOCKER_OK=1
-  else
-    warn "Docker-compatible API is not reachable"
-  fi
-else
-  warn "docker command not found"
+# OrbStack provides the Docker-compatible CLI/Compose runtime.
+if ! command -v brew >/dev/null 2>&1; then
+  die "Homebrew isn't installed. Install it from https://brew.sh, then rerun this script."
 fi
-
-# OrbStack normally provides an `orb` CLI.
-# Running `orb status` is read-only.
-if command -v orb >/dev/null 2>&1; then
-  ORB_CMD="$(command -v orb)"
-
-  if ORB_STATUS="$(orb status 2>&1)"; then
-    ORB_OK=1
-  else
-    warn "orb command is installed, but orb status did not succeed"
-  fi
-else
-  warn "orb command not found"
+if [[ ! -d /Applications/OrbStack.app && ! -d "$HOME/Applications/OrbStack.app" ]]; then
+  say "OrbStack not found; installing it."
+  brew install --cask orbstack
 fi
-
-if ((DOCKER_OK)); then
-  CONTEXT="$($DOCKER_CMD context show 2>/dev/null || true)"
-  CONTEXT_INFO="$($DOCKER_CMD context inspect "$CONTEXT" 2>/dev/null || true)"
-
-  # OrbStack commonly uses an "orbstack" Docker context.
-  if [[ "$CONTEXT" == *"orbstack"* ]] ||
-     grep -qi 'orbstack' <<<"$CONTEXT_INFO" ||
-     grep -qi 'orbstack' <<<"$DOCKER_INFO"; then
-    RUNTIME="orbstack"
-
-  # Docker Desktop commonly uses "desktop".
-  elif [[ "$CONTEXT" == *"docker-desktop"* ]] ||
-       [[ "$CONTEXT" == "desktop" ]] ||
-       grep -qi 'docker desktop' <<<"$CONTEXT_INFO"; then
-    RUNTIME="docker"
-
-  # Both may be installed. If the active context is ambiguous, do not guess.
-  elif ((ORB_OK)); then
-    RUNTIME="docker-compatible (OrbStack CLI installed; active context not identified as OrbStack)"
-  else
-    RUNTIME="docker-compatible"
-  fi
-elif ((ORB_OK)); then
-  RUNTIME="orbstack (CLI healthy; Docker API unavailable)"
+if ! command -v docker >/dev/null 2>&1; then
+  die "OrbStack is installed, but the Docker CLI isn't on PATH. Open OrbStack and enable its Docker CLI integration, then rerun."
 fi
-
-if ((DOCKER_OK)); then
-  pass "Docker-compatible engine is reachable"
-else
-  warn "No reachable Docker-compatible engine"
-fi
-
-if ((ORB_OK)); then
-  pass "OrbStack CLI status check succeeded"
-fi
-
-case "$RUNTIME" in
-  none)
-    fail "No container runtime detected"
-    FATAL=1
-    ;;
-  *)
-    pass "Detected runtime: $RUNTIME"
-    ;;
-esac
-
-# -----------------------------------------------------------------------------
-# 2. Find an existing Open WebUI container, if Docker is available.
-# -----------------------------------------------------------------------------
-
-if ((DOCKER_OK)); then
-  CONTAINERS="$($DOCKER_CMD ps -a --format '{{.Names}} {{.Status}}' |
-    grep -Ei 'open[-_ ]?webui' || true)"
-
-  if [[ -n "$CONTAINERS" ]]; then
-    pass "Existing Open WebUI container found:"
-    printf '%s\n' "$CONTAINERS"
-  else
-    warn "No Open WebUI-named container found"
-  fi
-fi
-
-# -----------------------------------------------------------------------------
-# 3. Check Ollama.
-# -----------------------------------------------------------------------------
-
 if ! command -v ollama >/dev/null 2>&1; then
-  fail "ollama command not found"
-else
-  if curl -fsS \
-    --connect-timeout 2 \
-    --max-time 3 \
-    http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
-    pass "Ollama API is responding"
-    OLLAMA_OK=1
+  say "Ollama not found; installing it."
+  brew install --cask ollama
+fi
+
+say "Starting OrbStack and Ollama if needed"
+open -a OrbStack 2>/dev/null || true
+open -a Ollama 2>/dev/null || true
+
+# Wait briefly for the local Ollama API. Don't silently install/start another runtime.
+for _ in {1..20}; do
+  if curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1; then break; fi
+  sleep 2
+done
+curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1 || die "Ollama isn't responding at localhost:11434. Open the Ollama app and rerun this script."
+
+docker info >/dev/null 2>&1 || die "Docker isn't responding yet. Wait for OrbStack to finish starting, then rerun this script."
+
+say "Pulling your local models (existing models are reused)"
+ollama pull qwen3:8b
+ollama pull gpt-oss:20b
+
+cd "$REPO"
+
+# Ask for an OpenRouter key without echoing it. Existing .env values are preserved.
+if ! grep -q '^OPENROUTER_KEY=.' .env 2>/dev/null; then
+  printf '\nOpenRouter is optional. Paste your API key now, or press Return to skip: '
+  read -r -s OPENROUTER_KEY
+  printf '\n'
+  touch .env
+  chmod 600 .env
+  # Remove any prior empty placeholder before writing the value.
+  if grep -q '^OPENROUTER_KEY=$' .env; then sed -i '' '/^OPENROUTER_KEY=$/d' .env; fi
+  if [[ -n "$OPENROUTER_KEY" ]]; then
+    printf '\nOPENROUTER_KEY=%s\n' "$OPENROUTER_KEY" >> .env
   else
-    fail "Ollama is installed, but its API is not responding on port 11434"
+    printf '\nOPENROUTER_KEY=\n' >> .env
   fi
+  unset OPENROUTER_KEY
 fi
 
-# -----------------------------------------------------------------------------
-# 4. Check for qwen3:8b.
-# -----------------------------------------------------------------------------
-
-if ((OLLAMA_OK)); then
-  if ollama list 2>/dev/null | awk '$1 ~ /^qwen3:8b($|-)/ {found=1} END {exit !found}'; then
-    pass "qwen3:8b is installed"
-    MODEL_OK=1
-  else
-    fail "qwen3:8b is not installed"
-  fi
+# Merge the two custom endpoints into librechat.yaml, preserving other YAML settings.
+# A timestamped backup is made first. Ruby's YAML library is included with macOS Ruby.
+if [[ -f librechat.yaml ]]; then
+  cp -p librechat.yaml "librechat.yaml.bak.$(date +%Y%m%d-%H%M%S)"
 fi
+ruby -ryaml -e '
+path = "librechat.yaml"
+cfg = File.exist?(path) ? (YAML.load_file(path) || {}) : {}
+cfg["version"] ||= "1.3.17"
+cfg["cache"] = true unless cfg.key?("cache")
+cfg["endpoints"] ||= {}
+cfg["endpoints"]["custom"] ||= []
+custom = cfg["endpoints"]["custom"]
 
-# -----------------------------------------------------------------------------
-# 5. Check Open WebUI.
-# -----------------------------------------------------------------------------
+ollama = {
+  "name" => "Ollama",
+  "apiKey" => "ollama",
+  "baseURL" => "http://host.docker.internal:11434/v1/",
+  "models" => {"default" => ["qwen3:8b", "gpt-oss:20b"], "fetch" => false},
+  "titleConvo" => true,
+  "titleModel" => "current_model",
+  "modelDisplayLabel" => "Ollama"
+}
+openrouter = {
+  "name" => "OpenRouter",
+  "apiKey" => "${OPENROUTER_KEY}",
+  "baseURL" => "https://openrouter.ai/api/v1",
+  "models" => {"default" => ["openrouter/free"], "fetch" => true},
+  "titleConvo" => true,
+  "titleModel" => "openrouter/free",
+  "dropParams" => ["stop"],
+  "modelDisplayLabel" => "OpenRouter"
+}
+[ollama, openrouter].each do |endpoint|
+  index = custom.index { |item| item.is_a?(Hash) && item["name"] == endpoint["name"] }
+  index ? custom[index] = endpoint : custom << endpoint
+end
+File.write(path, YAML.dump(cfg))
+' || die "Couldn't update librechat.yaml. Your backup, if one existed, is safe. Check the YAML file manually."
 
-if curl -fsSL \
-  --connect-timeout 2 \
-  --max-time 5 \
-  http://127.0.0.1:3000/ >/dev/null 2>&1; then
-  pass "Open WebUI is responding at http://localhost:3000"
-  WEBUI_OK=1
-else
-  fail "Open WebUI is not responding at http://localhost:3000"
+# Ensure Docker Compose mounts the custom endpoint config, without replacing other overrides.
+if [[ -f docker-compose.override.yml ]]; then
+  cp -p docker-compose.override.yml "docker-compose.override.yml.bak.$(date +%Y%m%d-%H%M%S)"
 fi
+ruby -ryaml -e '
+path = "docker-compose.override.yml"
+cfg = File.exist?(path) ? (YAML.load_file(path) || {}) : {}
+cfg["services"] ||= {}
+cfg["services"]["api"] ||= {}
+volumes = cfg["services"]["api"]["volumes"] ||= []
+mount = {"type" => "bind", "source" => "./librechat.yaml", "target" => "/app/librechat.yaml"}
+unless volumes.any? { |v| v.is_a?(Hash) && v["target"] == "/app/librechat.yaml" }
+  volumes << mount
+end
+File.write(path, YAML.dump(cfg))
+' || die "Couldn't update docker-compose.override.yml. Check the file and rerun."
 
-# -----------------------------------------------------------------------------
-# 6. Optionally validate the OpenRouter key.
-#
-# The key must be supplied through OPENROUTER_API_KEY. It is never written to
-# the script and is not printed by this script.
-# -----------------------------------------------------------------------------
+say "Starting LibreChat"
+docker compose up -d
 
-if [[ -z "$OPENROUTER_KEY" ]]; then
-  warn "OPENROUTER_API_KEY is not set; skipping OpenRouter authentication test"
-else
-  if HTTP_CODE="$(curl -sS \
-    --connect-timeout 5 \
-    --max-time 15 \
-    -o /dev/null \
-    -w '%{http_code}' \
-    -H "Authorization: Bearer $OPENROUTER_KEY" \
-    https://openrouter.ai/api/v1/models 2>/dev/null)"; then
-
-    if [[ "$HTTP_CODE" == "200" ]]; then
-      pass "OpenRouter API authentication succeeded"
-      OR_AUTH_OK=1
-    elif [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "403" ]]; then
-      fail "OpenRouter rejected the API key"
-    else
-      warn "OpenRouter API returned HTTP $HTTP_CODE"
-    fi
-  else
-    fail "Could not reach the OpenRouter API"
-  fi
-fi
-
-# -----------------------------------------------------------------------------
-# 7. Summary and exit status.
-# -----------------------------------------------------------------------------
-
-if ((DOCKER_OK == 0)); then
-  fail "No reachable Docker-compatible API"
-  FATAL=1
-fi
-
-if ((OLLAMA_OK == 0)); then
-  FATAL=1
-fi
-
-if ((MODEL_OK == 0)); then
-  FATAL=1
-fi
-
-if ((WEBUI_OK == 0)); then
-  FATAL=1
-fi
-
-if [[ -n "$OPENROUTER_KEY" && "$OR_AUTH_OK" -eq 0 ]]; then
-  FATAL=1
-fi
-
-if ((FATAL)); then
-  printf '\nPreflight failed. No changes were made.\n'
-  exit 1
-fi
-
-printf '\nPreflight passed. No changes were made.\n'
-exit 0
+printf '\nAll set. Open LibreChat at http://localhost:3080\n'
+printf 'Choose the Ollama endpoint for local models, or OpenRouter for cloud models.\n'
+printf 'If OpenRouter was skipped, add your key to %s/.env as OPENROUTER_KEY=... and rerun this script.\n' "$REPO"
+printf '\nUseful commands:\n  cd ~/repos/LibreChat && docker compose logs -f api\n  cd ~/repos/LibreChat && docker compose down\n'
