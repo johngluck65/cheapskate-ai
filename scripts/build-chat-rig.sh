@@ -1,130 +1,171 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Minimal setup/start script for an existing LibreChat checkout on macOS.
-# It backs up config files before editing them and never overwrites an existing API key.
+# AI Chat Rig bootstrap for macOS
+#
+# Target architecture:
+#   Ollama -> Qwen3 8B (local)
+#   Open WebUI -> Ollama + OpenRouter
+#   OpenRouter -> openrouter/free
+#
+# This script is intentionally conservative:
+# - It does not delete/recreate an existing Open WebUI container.
+# - It does not store your OpenRouter API key in this file.
+# - It can be rerun safely.
+#
+# IMPORTANT:
+# Open WebUI's admin connection settings are application data, and the exact
+# REST/admin API for modifying them can vary by Open WebUI version. Therefore
+# this script prepares and verifies the local stack, then prints the exact
+# OpenRouter values to enter if the connection is not already configured.
+#
+# Usage:
+#   chmod +x build-chat-rig.sh
+#   ./build-chat-rig.sh
+#
+# Optional:
+#   OPENROUTER_API_KEY='...' ./build-chat-rig.sh
+#
+# The key is NEVER printed.
 
-REPO="$HOME/repos/LibreChat"
+OPEN_WEBUI_URL="${OPEN_WEBUI_URL:-http://localhost:3000}"
+OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-qwen3:8b}"
+OPENROUTER_BASE_URL="${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}"
+OPENROUTER_MODEL="${OPENROUTER_MODEL:-openrouter/free}"
 
-say() { printf '\n==> %s\n' "$*"; }
-die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
+log()  { printf '\n==> %s\n' "$1"; }
+warn() { printf '\nWARNING: %s\n' "$1" >&2; }
+die()  { printf '\nERROR: %s\n' "$1" >&2; exit 1; }
 
-[[ "$(uname -s)" == "Darwin" ]] || die "This script is for macOS."
-[[ -d "$REPO/.git" ]] || die "I can't find a LibreChat git checkout at $REPO. Edit REPO near the top of this script if needed."
+command -v curl >/dev/null 2>&1 || die "curl is required."
+command -v docker >/dev/null 2>&1 || die "Docker CLI is not installed/in PATH. Start OrbStack or Docker Desktop first."
 
-# OrbStack provides the Docker-compatible CLI/Compose runtime.
-if ! command -v brew >/dev/null 2>&1; then
-  die "Homebrew isn't installed. Install it from https://brew.sh, then rerun this script."
-fi
-if [[ ! -d /Applications/OrbStack.app && ! -d "$HOME/Applications/OrbStack.app" ]]; then
-  say "OrbStack not found; installing it."
-  brew install --cask orbstack
-fi
-if ! command -v docker >/dev/null 2>&1; then
-  die "OrbStack is installed, but the Docker CLI isn't on PATH. Open OrbStack and enable its Docker CLI integration, then rerun."
-fi
+log "Checking Docker/OrbStack"
+docker info >/dev/null 2>&1 || die "Docker is not running. Start OrbStack (or Docker Desktop), then rerun this script."
+
+log "Checking Ollama"
 if ! command -v ollama >/dev/null 2>&1; then
-  say "Ollama not found; installing it."
-  brew install --cask ollama
-fi
-
-say "Starting OrbStack and Ollama if needed"
-open -a OrbStack 2>/dev/null || true
-open -a Ollama 2>/dev/null || true
-
-# Wait briefly for the local Ollama API. Don't silently install/start another runtime.
-for _ in {1..20}; do
-  if curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1; then break; fi
-  sleep 2
-done
-curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1 || die "Ollama isn't responding at localhost:11434. Open the Ollama app and rerun this script."
-
-docker info >/dev/null 2>&1 || die "Docker isn't responding yet. Wait for OrbStack to finish starting, then rerun this script."
-
-say "Pulling your local models (existing models are reused)"
-ollama pull qwen3:8b
-ollama pull gpt-oss:20b
-
-cd "$REPO"
-
-# Ask for an OpenRouter key without echoing it. Existing .env values are preserved.
-if ! grep -q '^OPENROUTER_KEY=.' .env 2>/dev/null; then
-  printf '\nOpenRouter is optional. Paste your API key now, or press Return to skip: '
-  read -r -s OPENROUTER_KEY
-  printf '\n'
-  touch .env
-  chmod 600 .env
-  # Remove any prior empty placeholder before writing the value.
-  if grep -q '^OPENROUTER_KEY=$' .env; then sed -i '' '/^OPENROUTER_KEY=$/d' .env; fi
-  if [[ -n "$OPENROUTER_KEY" ]]; then
-    printf '\nOPENROUTER_KEY=%s\n' "$OPENROUTER_KEY" >> .env
+  warn "Ollama is not installed."
+  if command -v brew >/dev/null 2>&1; then
+    read -r -p "Install Ollama with Homebrew now? [Y/n] " answer
+    answer="${answer:-Y}"
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+      brew install --cask ollama
+    else
+      die "Ollama is required for the local Qwen3 8B side of the rig."
+    fi
   else
-    printf '\nOPENROUTER_KEY=\n' >> .env
+    die "Homebrew is not installed, so the script cannot install Ollama automatically."
   fi
-  unset OPENROUTER_KEY
 fi
 
-# Merge the two custom endpoints into librechat.yaml, preserving other YAML settings.
-# A timestamped backup is made first. Ruby's YAML library is included with macOS Ruby.
-if [[ -f librechat.yaml ]]; then
-  cp -p librechat.yaml "librechat.yaml.bak.$(date +%Y%m%d-%H%M%S)"
+if ! curl -fsS "$OLLAMA_URL/api/tags" >/dev/null 2>&1; then
+  warn "Ollama is installed but its server is not responding at $OLLAMA_URL."
+  warn "Start the Ollama app, then rerun this script."
+  exit 1
 fi
-ruby -ryaml -e '
-path = "librechat.yaml"
-cfg = File.exist?(path) ? (YAML.load_file(path) || {}) : {}
-cfg["version"] ||= "1.3.17"
-cfg["cache"] = true unless cfg.key?("cache")
-cfg["endpoints"] ||= {}
-cfg["endpoints"]["custom"] ||= []
-custom = cfg["endpoints"]["custom"]
 
-ollama = {
-  "name" => "Ollama",
-  "apiKey" => "ollama",
-  "baseURL" => "http://host.docker.internal:11434/v1/",
-  "models" => {"default" => ["qwen3:8b", "gpt-oss:20b"], "fetch" => false},
-  "titleConvo" => true,
-  "titleModel" => "current_model",
-  "modelDisplayLabel" => "Ollama"
-}
-openrouter = {
-  "name" => "OpenRouter",
-  "apiKey" => "${OPENROUTER_KEY}",
-  "baseURL" => "https://openrouter.ai/api/v1",
-  "models" => {"default" => ["openrouter/free"], "fetch" => true},
-  "titleConvo" => true,
-  "titleModel" => "openrouter/free",
-  "dropParams" => ["stop"],
-  "modelDisplayLabel" => "OpenRouter"
-}
-[ollama, openrouter].each do |endpoint|
-  index = custom.index { |item| item.is_a?(Hash) && item["name"] == endpoint["name"] }
-  index ? custom[index] = endpoint : custom << endpoint
-end
-File.write(path, YAML.dump(cfg))
-' || die "Couldn't update librechat.yaml. Your backup, if one existed, is safe. Check the YAML file manually."
-
-# Ensure Docker Compose mounts the custom endpoint config, without replacing other overrides.
-if [[ -f docker-compose.override.yml ]]; then
-  cp -p docker-compose.override.yml "docker-compose.override.yml.bak.$(date +%Y%m%d-%H%M%S)"
+log "Checking local model: $OLLAMA_MODEL"
+if ! ollama list | awk 'NR>1 {print $1}' | grep -Fxq "$OLLAMA_MODEL"; then
+  echo "Model $OLLAMA_MODEL is not installed. Pulling it..."
+  ollama pull "$OLLAMA_MODEL"
+else
+  echo "$OLLAMA_MODEL is already installed."
 fi
-ruby -ryaml -e '
-path = "docker-compose.override.yml"
-cfg = File.exist?(path) ? (YAML.load_file(path) || {}) : {}
-cfg["services"] ||= {}
-cfg["services"]["api"] ||= {}
-volumes = cfg["services"]["api"]["volumes"] ||= []
-mount = {"type" => "bind", "source" => "./librechat.yaml", "target" => "/app/librechat.yaml"}
-unless volumes.any? { |v| v.is_a?(Hash) && v["target"] == "/app/librechat.yaml" }
-  volumes << mount
-end
-File.write(path, YAML.dump(cfg))
-' || die "Couldn't update docker-compose.override.yml. Check the file and rerun."
 
-say "Starting LibreChat"
-docker compose up -d
+log "Testing local Ollama model"
+if curl -fsS "$OLLAMA_URL/api/tags" | grep -q '"name":"'"${OLLAMA_MODEL//:/\\:}"'"'; then
+  echo "Ollama reports $OLLAMA_MODEL."
+else
+  echo "Ollama is responding; verify the model with: ollama list"
+fi
 
-printf '\nAll set. Open LibreChat at http://localhost:3080\n'
-printf 'Choose the Ollama endpoint for local models, or OpenRouter for cloud models.\n'
-printf 'If OpenRouter was skipped, add your key to %s/.env as OPENROUTER_KEY=... and rerun this script.\n' "$REPO"
-printf '\nUseful commands:\n  cd ~/repos/LibreChat && docker compose logs -f api\n  cd ~/repos/LibreChat && docker compose down\n'
+log "Checking Open WebUI"
+if curl -fsS "$OPEN_WEBUI_URL" >/dev/null 2>&1; then
+  echo "Open WebUI is responding at $OPEN_WEBUI_URL."
+else
+  warn "Open WebUI is not responding at $OPEN_WEBUI_URL."
+  echo
+  echo "Running containers:"
+  docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}'
+  echo
+  warn "Start your existing Open WebUI container and rerun this script."
+  exit 1
+fi
+
+log "Checking OpenRouter"
+if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+  echo "An OpenRouter key was supplied through OPENROUTER_API_KEY."
+  echo "Testing the key without printing it..."
+  status="$(
+    curl -sS -o /tmp/openrouter_models_$$.json -w '%{http_code}' \
+      -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+      "$OPENROUTER_BASE_URL/models" || true
+  )"
+  if [[ "$status" == "200" ]]; then
+    echo "OpenRouter API key works."
+  else
+    rm -f /tmp/openrouter_models_$$.json
+    warn "OpenRouter returned HTTP $status."
+    warn "Check the key in 1Password/OpenRouter and try again."
+  fi
+  rm -f /tmp/openrouter_models_$$.json
+else
+  echo "No OpenRouter key supplied."
+  echo "That is intentional: the script will not store or prompt-and-save your secret."
+fi
+
+cat <<EOF
+
+============================================================
+CHAT RIG CHECK
+============================================================
+
+Local provider
+  Ollama:       $OLLAMA_URL
+  Model:        $OLLAMA_MODEL
+
+Open WebUI
+  URL:          $OPEN_WEBUI_URL
+
+OpenRouter
+  Base URL:     $OPENROUTER_BASE_URL
+  Free router:  $OPENROUTER_MODEL
+
+============================================================
+OPEN WEBUI CONFIGURATION
+============================================================
+
+Your Open WebUI instance is already running, so this script does
+NOT replace/recreate it.
+
+In Open WebUI, use:
+
+  Admin Settings -> Connections -> OpenAI API
+
+OpenRouter Base URL:
+  $OPENROUTER_BASE_URL
+
+API Key:
+  paste your OpenRouter key from 1Password
+
+Model:
+  $OPENROUTER_MODEL
+
+Keep the OpenRouter connection restricted to:
+  $OPENROUTER_MODEL
+
+Then your model selector should contain:
+
+  $OLLAMA_MODEL       (local, free)
+  $OPENROUTER_MODEL   (cloud free-model router)
+
+============================================================
+DONE
+============================================================
+
+No API key was written to this script.
+No existing Open WebUI container was deleted or recreated.
+
+EOF
