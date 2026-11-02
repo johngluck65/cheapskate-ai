@@ -1,108 +1,111 @@
-# cheapskate-ai
-# dev‑rig checker  
+# Cheapskate AI
 
-A lightweight, read‑only script that verifies your personal development environment (OrbStack/Docker + Ollama + Open WebUI + OpenRouter) without making any changes.
+A set of conservative macOS installers for three self-hosted AI chat options:
 
----
+- **Odysseus**: an integrated assistant with persistent memory and a native Apple Silicon launch path.
+- **LibreChat**: a multi-provider chat interface.
+- **Open WebUI**: a chat interface for Ollama and OpenAI-compatible providers.
 
-## Table of Contents
-- [Prerequisites](#prerequisites)  
-- [Quick start](#quick-start)  
-- [What the script checks](#what-the-script-checks)  
-- [Environment variables](#environment-variables)  
-- [Interpreting the output](#interpreting-the-output)  
-- [Troubleshooting](#troubleshooting)  
-- [License](#license)
+The goal is to keep ongoing costs optional, avoid unnecessary installs, and leave existing data alone.
 
----
+## Before you start
 
-## Prerequisites
-- macOS (Intel or Apple Silicon)  
-- **OrbStack** installed and running *or* any Docker‑compatible runtime (Docker Desktop, Colima, etc.) – the script will auto‑detect which one is active.  
-- Docker CLI available in `$PATH` (`docker` command).  
-- **Ollama** installed and its API listening on `http://127.0.0.1:11434`.  
-- Model `qwen3:8b` present in Ollama (`ollama list`).  
-- **Open WebUI** reachable at `http://localhost:3000`.  
-- `curl` and `awk` (standard on macOS).  
-- **OpenRouter API key** (optional, only for the authentication test) – provide via the `OPENROUTER_API_KEY` environment variable.
+These scripts are for macOS. Apple Silicon is the primary target; Intel support depends on each upstream project.
 
----
+You need Homebrew and Git. The shared setup script checks these and installs Git if needed. It does not install a container runtime, Python, Ollama, or any models.
 
-## Quick start
+OrbStack is a good Docker-compatible runtime for the two container-based rigs. Docker Desktop is not required. Start OrbStack before installing LibreChat or Open WebUI.
+
+## 1. Get the repository
+
 ```bash
-# Make the script executable (once)
-chmod +x scripts/check-dev-rig.sh
-
-# Run the check‑only mode
-./scripts/check-dev-rig.sh --check-only
+git clone https://github.com/johngluck65/cheapskate-ai.git
+cd cheapskate-ai
 ```
 
-The script exits with status `0` when every checked component is healthy; a non‑zero exit status indicates at least one issue.
+## 2. Prepare the shared foundation
 
----
-
-## What the script checks
-| Component | Check performed | Success condition |
-|-----------|----------------|-------------------|
-| Docker‑compatible engine | `docker info` | Returns daemon info without error |
-| Runtime detection | Looks for OrbStack (`orb status`) and Docker context | Reports whether OrbStack, Docker Desktop, or a generic Docker‑compatible engine is active |
-| Ollama | HTTP GET to `http://127.0.0.1:11434/api/tags` | Returns 200 OK |
-| Model `qwen3:8b` | Parses output of `ollama list` (plain text) | Finds a line where the first column equals `qwen3:8b` |
-| Open WebUI reachability | HTTP GET to `http://127.0.0.1:3000/` | Returns 200 OK |
-| Open WebUI model list (optional) | HTTP GET to `http://127.0.0.1:3000/api/models` (requires no auth) | Returns JSON containing an entry with `"id"` or `"name"` equal to `qwen3:8b` |
-| OpenRouter authentication (if key supplied) | HTTP GET to `https://openrouter.ai/api/v1/models` with `Authorization: Bearer $OPENROUTER_API_KEY` | Returns 200 OK |
-
-**The script never installs, pulls, starts, stops, or deletes anything.** It is safe to run as often as you like.
-
----
-
-## Environment variables
-| Variable | Purpose | Example |
-|----------|---------|---------|
-| `OPENROUTER_API_KEY` | Your OpenRouter API key (only used for the optional authentication test). Do **not** hard‑code it in the script. | `export OPENROUTER_API_KEY=sk-or-…` |
-| `OPENWEBUI_URL` *(optional)* | Override the default Open WebUI base URL. | `export OPENWEBUI_URL=http://127.0.0.1:8080` |
-
-If `OPENROUTER_API_KEY` is not set, the OpenRouter authentication step is skipped and reported as a warning.
-
----
-
-## Interpreting the output
-Each line is prefixed with one of:
-
-- `PASS:` – the check succeeded.  
-- `WARN:` – a non‑fatal issue was detected (script continues).  
-- `FAIL:` – a required check failed; the script will exit with status 1 after summarizing all failures.  
-
-At the end you’ll see either:
-
-```
-Preflight passed. No changes were made.
-```
-or  
-```
-Preflight failed. No changes were made.
+```bash
+chmod +x scripts/*.sh
+chmod +x scripts/lib/*.sh
+./scripts/setup-foundation.sh
 ```
 
-followed by the exit code.
+This checks Homebrew and Git. It deliberately does not install every possible dependency.
 
----
+## 3. Install only the rigs you want
 
-## Troubleshooting common failures
-| Symptom | Likely cause | Fix |
-|---------|--------------|-----|
-| `FAIL: No reachable Docker‑compatible API` | OrbStack/Docker not running or Docker CLI not in `$PATH` | Start OrbStack (`open -a OrbStack`) or Docker Desktop; ensure `docker` works in a terminal. |
-| `FAIL: ollama command not found` / `FAIL: Ollama is installed, but its API is not responding` | Ollama not installed or daemon not running | `brew install ollama` (or follow Ollama install instructions) then `ollama serve` in the background. |
-| `FAIL: qwen3:8b is not installed` | Model not pulled or name mismatch | Run `ollama pull qwen3:8b`. Verify with `ollama list`. |
-| `FAIL: Open WebUI is not responding at http://localhost:3000` | Container stopped or wrong port | Start the container (`docker start open-webui` or via OrbStack UI) and confirm the port. |
-| `WARN: OPENROUTER_API_KEY is not set; skipping OpenRouter authentication test` | Key not supplied (expected if you don’t want to test auth) | Export the key if you wish to test: `export OPENROUTER_API_KEY=...` |
-| `WARN: Open WebUI /api/models returned HTTP 401/403` | Open WebUI requires login to view the model list | Log in to Open WebUI in your browser; the checker can’t query the list without auth, but if you see the model in the UI dropdown it’s loaded. |
-| `WARN: Could not reach Open WebUI's /api/models endpoint` | API path changed or server not ready | Wait a few seconds for Open WebUI to finish starting; check its logs. |
+### Odysseus
 
----
+```bash
+./scripts/build-odysseus-rig.sh
+```
+
+The script clones the upstream `main` branch into `~/repos/odysseus` unless `ODYSSEUS_DIR` is set. It does not update or overwrite an existing checkout. Start it with:
+
+```bash
+cd ~/repos/odysseus
+./start-macos.sh
+```
+
+On Apple Silicon, use the native launcher. Docker on macOS runs inside a Linux VM and cannot give Odysseus direct access to Apple's Metal GPU. The upstream launcher handles its Python environment and dependencies. The first run can take a while and may download substantial dependencies.
+
+### LibreChat
+
+Start OrbStack, then run:
+
+```bash
+./scripts/build-librechat-rig.sh
+```
+
+The script clones LibreChat into `~/repos/LibreChat`, creates `.env` from the upstream example only if one does not already exist, and starts the upstream Docker Compose stack. The app is normally at http://localhost:3080.
+
+LibreChat is an interface, not a model. You must configure a provider. Some providers charge for usage. The first Docker start downloads several images and services. Keep at least a couple of GB available to the container runtime. Older Intel Macs without AVX may not support the default MongoDB image.
+
+### Open WebUI
+
+Start OrbStack, then run:
+
+```bash
+./scripts/build-openui-rig.sh
+```
+
+The script starts the official Open WebUI container at http://localhost:3000 and stores its data in the persistent Docker volume named `open-webui`.
+
+It does **not** install Ollama or download a model. Those are optional and can be installed separately. Open WebUI can also connect to hosted OpenAI-compatible providers. Provider charges are separate from the software.
+
+To use another port:
+
+```bash
+OPEN_WEBUI_PORT=3001 ./scripts/build-openui-rig.sh
+```
+
+To select a different official image tag:
+
+```bash
+OPEN_WEBUI_IMAGE=ghcr.io/open-webui/open-webui:main-slim ./scripts/build-openui-rig.sh
+```
+
+## What the scripts will and won't do
+
+- They are safe to rerun in the normal case.
+- Existing project checkouts are not pulled, reset, or overwritten.
+- Existing LibreChat `.env` files are left alone.
+- Existing named containers are started if stopped, not recreated.
+- Open WebUI uses a persistent named volume for its data.
+- API keys are not embedded in scripts or automatically saved.
+- No model is downloaded automatically.
+- No container, volume, model, or user data is deliberately deleted.
+
+The installers do not silently install OrbStack or Docker Desktop. You choose and install your Docker-compatible runtime.
+
+## Useful upstream documentation
+
+- [Odysseus installation](https://odysseusai.dev/install)
+- [LibreChat Docker installation](https://www.librechat.ai/docs/local/docker)
+- [Open WebUI quick start](https://docs.openwebui.com/getting-started/quick-start/)
+- [OrbStack](https://orbstack.dev/)
 
 ## License
-This script is released under the MIT License – see the accompanying `LICENSE` file for details.
 
---- 
-
-*Happy checking!*
+MIT. See [LICENSE](LICENSE).
