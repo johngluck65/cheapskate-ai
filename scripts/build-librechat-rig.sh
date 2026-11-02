@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"$SCRIPT_DIR/setup-foundation.sh"
 source "$SCRIPT_DIR/lib/common.sh"
-require_macos
 ensure_git
 ensure_docker
 
