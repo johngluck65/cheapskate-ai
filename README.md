@@ -12,28 +12,22 @@ The goal is to keep ongoing costs optional, avoid unnecessary installs, and leav
 
 These scripts are for macOS. Apple Silicon is the primary target; Intel support depends on each upstream project.
 
-You need Homebrew and Git. The shared setup script checks these and installs Git if needed. It does not install a container runtime, Python, Ollama, or any models.
+You need Homebrew. Each installer automatically runs the shared foundation setup first. That checks for Homebrew and installs Git if it is missing. It does not install a container runtime, Python, Ollama, or any models.
 
 OrbStack is a good Docker-compatible runtime for the two container-based rigs. Docker Desktop is not required. Start OrbStack before installing LibreChat or Open WebUI.
 
-## 1. Get the repository
+## Get the repository
 
 ```bash
 git clone https://github.com/johngluck65/cheapskate-ai.git
 cd cheapskate-ai
-```
-
-## 2. Prepare the shared foundation
-
-```bash
 chmod +x scripts/*.sh
 chmod +x scripts/lib/*.sh
-./scripts/setup-foundation.sh
 ```
 
-This checks Homebrew and Git. It deliberately does not install every possible dependency.
+You do not need to run `setup-foundation.sh` yourself. Each rig installer calls it automatically, so you can use any of the three on a separate Mac without first installing another rig or running a separate setup step.
 
-## 3. Install only the rigs you want
+## Install only the rig you want
 
 ### Odysseus
 
@@ -41,7 +35,7 @@ This checks Homebrew and Git. It deliberately does not install every possible de
 ./scripts/build-odysseus-rig.sh
 ```
 
-The script clones the upstream `main` branch into `~/repos/odysseus` unless `ODYSSEUS_DIR` is set. It does not update or overwrite an existing checkout. Start it with:
+The script clones the upstream `main` branch into `~/repos/odysseus` unless `ODYSSEUS_DIR` is set. It does not update or overwrite an existing checkout. After setup, start it with:
 
 ```bash
 cd ~/repos/odysseus
@@ -88,6 +82,7 @@ OPEN_WEBUI_IMAGE=ghcr.io/open-webui/open-webui:main-slim ./scripts/build-openui-
 
 ## What the scripts will and won't do
 
+- Each installer runs the shared foundation setup automatically.
 - They are safe to rerun in the normal case.
 - Existing project checkouts are not pulled, reset, or overwritten.
 - Existing LibreChat `.env` files are left alone.
@@ -97,7 +92,7 @@ OPEN_WEBUI_IMAGE=ghcr.io/open-webui/open-webui:main-slim ./scripts/build-openui-
 - No model is downloaded automatically.
 - No container, volume, model, or user data is deliberately deleted.
 
-The installers do not silently install OrbStack or Docker Desktop. You choose and install your Docker-compatible runtime.
+The installers do not silently install OrbStack or Docker Desktop. You choose and install your Docker-compatible runtime before running LibreChat or Open WebUI.
 
 ## Useful upstream documentation
 
