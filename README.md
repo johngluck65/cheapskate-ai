@@ -44,6 +44,28 @@ cd ~/repos/odysseus
 
 On Apple Silicon, use the native launcher. Docker on macOS runs inside a Linux VM and cannot give Odysseus direct access to Apple's Metal GPU. The upstream launcher handles its Python environment and dependencies. The first run can take a while and may download substantial dependencies.
 
+#### Connect a local model with Ollama
+
+Odysseus is the chat workspace; Ollama runs the model. They are separate programs, and you need to connect them before you can chat with a local model.
+
+1. Install the Ollama macOS app from [ollama.com](https://ollama.com/download/mac), then open it.
+2. In Terminal, download a model that fits your Mac's memory. For example:
+
+   ```bash
+   ollama pull llama3.1:8b
+   ```
+
+   If that model is too large for your machine, choose a smaller one. The official guide includes hardware-based suggestions.
+3. In Odysseus, open **Settings** and add a model provider using this base URL:
+
+   ```
+   http://localhost:11434/v1
+   ```
+
+   This is the address for a native Mac installation. Select the model you downloaded when it appears in Odysseus.
+
+For screenshots, alternative model suggestions, and troubleshooting, follow the [official Odysseus guide to using Ollama](https://odysseusai.dev/ollama). Its Docker networking instructions are not needed for this native macOS setup.
+
 ### LibreChat
 
 Start OrbStack, then run:
