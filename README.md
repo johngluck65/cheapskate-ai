@@ -12,7 +12,7 @@ The goal is to keep ongoing costs optional, avoid unnecessary installs, and leav
 
 These scripts are for macOS. Apple Silicon is the primary target; Intel support depends on each upstream project.
 
-You need Homebrew. Each installer automatically runs the shared foundation setup first. That checks for Homebrew and installs Git if it is missing. It does not install a container runtime, Python, Ollama, or any models.
+You need Homebrew. Each installer sources the shared helpers in `scripts/lib/common.sh`, checks for Homebrew, and installs Git with Homebrew if Git is missing. The Odysseus installer also needs Git to clone its checkout. These checks do not install a container runtime, Python, Ollama, or any models.
 
 OrbStack is a good Docker-compatible runtime for the two container-based rigs. Docker Desktop is not required. Start OrbStack before installing LibreChat or Open WebUI.
 
@@ -25,7 +25,7 @@ chmod +x scripts/*.sh
 chmod +x scripts/lib/*.sh
 ```
 
-You do not need to run `setup-foundation.sh` yourself. Each rig installer calls it automatically, so you can use any of the three on a separate Mac without first installing another rig or running a separate setup step.
+Each rig installer performs its prerequisite checks directly, so you can use any of the three on a separate Mac without installing another rig or running a separate setup step.
 
 ## Install only the rig you want
 
@@ -104,7 +104,7 @@ OPEN_WEBUI_IMAGE=ghcr.io/open-webui/open-webui:main-slim ./scripts/build-openui-
 
 ## What the scripts will and won't do
 
-- Each installer runs the shared foundation setup automatically.
+- Each installer sources `scripts/lib/common.sh` and performs its prerequisite checks automatically.
 - They are safe to rerun in the normal case.
 - Existing project checkouts are not pulled, reset, or overwritten.
 - Existing LibreChat `.env` files are left alone.
